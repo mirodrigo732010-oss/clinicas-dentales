@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readFile, writeFile, access, mkdir } from 'fs/promises';
+import { readFile, access, mkdir } from 'fs/promises';
 import { join } from 'path';
-import ZAI from 'z-ai-web-dev-sdk';
 
 const DATA_DIR = join(process.cwd(), 'data');
 const CONFIG_FILE = join(DATA_DIR, 'assistant-config.json');
 const KNOWLEDGE_FILE = join(DATA_DIR, 'knowledge.json');
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
-// Default config
 const DEFAULT_CONFIG = {
   name: 'Elena',
   title: 'Asistente Virtual',
@@ -20,34 +19,26 @@ const DEFAULT_CONFIG = {
   isActive: true
 };
 
-// In-memory conversations
-const conversations = new Map<string, Array<{ role: string; content: string }>>();
+type ChatRole = 'system' | 'user' | 'assistant';
+type ChatMessage = { role: ChatRole; content: string };
 
-// ZAI instance (se crea una vez)
-let zaiInstance: any = null;
+const conversations = new Map<string, ChatMessage[]>();
 
-async function getZAI() {
-  if (!zaiInstance) {
-    zaiInstance = await ZAI.create();
-  }
-  return zaiInstance;
-}
-
-// Helper functions
 async function ensureDataDir() {
-  try { await access(DATA_DIR); } catch { await mkdir(DATA_DIR, { recursive: true }); }
+  try {
+    await access(DATA_DIR);
+  } catch {
+    await mkdir(DATA_DIR, { recursive: true });
+  }
 }
 
 async function getConfig() {
   try {
     const data = await readFile(CONFIG_FILE, 'utf-8');
     return { ...DEFAULT_CONFIG, ...JSON.parse(data) };
-  } catch { return DEFAULT_CONFIG; }
-}
-
-async function saveConfig(config: any) {
-  await ensureDataDir();
-  await writeFile(CONFIG_FILE, JSON.stringify({ ...config, updatedAt: new Date().toISOString() }, null, 2));
+  } catch {
+    return DEFAULT_CONFIG;
+  }
 }
 
 async function getKnowledge() {
@@ -55,58 +46,148 @@ async function getKnowledge() {
     const data = await readFile(KNOWLEDGE_FILE, 'utf-8');
     const knowledge = JSON.parse(data);
     return knowledge?.content?.trim() || '';
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 
 function buildSystemPrompt(name: string, knowledge: string): string {
-  let prompt = `Eres ${name}, un asistente virtual amable y profesional de la Clínica Dental Sonrisa Perfecta.
+  let prompt = `Eres ${name}, la asistente virtual oficial de la Clínica Dental Sonrisa Perfecta.
 
-INFORMACIÓN IMPORTANTE:
-- Teléfono: 5517489261
+OBJETIVO:
+Responder dudas de pacientes, explicar servicios, horarios, formas de pago, ubicación y ayudar a que agenden una cita.
+
+ESTILO:
+- Habla siempre en español de México.
+- Sé amable, cálida, profesional y clara.
+- Responde de forma natural, no robótica.
+- Da respuestas útiles y concretas.
+- No inventes información.
+
+REGLAS IMPORTANTES:
+- Usa primero la base de conocimiento proporcionada.
+- Si falta un dato, dilo con honestidad.
+- Si no sabes algo, invita al paciente a contactar por WhatsApp al 55 1748 9261.
+- Cuando el usuario quiera reservar, reagendar o cancelar, indícale que use el botón o formulario de cita del sitio.
+- No prometas descuentos, horarios, doctores o tratamientos que no aparezcan en la base de conocimiento.
+- Si el usuario pregunta varias cosas, contesta todo en orden.
+- Puedes usar emojis con moderación cuando ayuden a que la respuesta se vea amable.
+
+DATOS FIJOS DEL NEGOCIO:
+- Teléfono: 55 1748 9261
 - WhatsApp: +52 55 1748 9261
-- Dirección: Jacarandas 54 Col. Ahuehuetes, Tlalnepantla, Edo. Méx. CP 54150
-- Moneda: MXN (Pesos Mexicanos)
-
-INSTRUCCIONES:
-1. Saluda de manera cálida y profesional
-2. USA LA BASE DE CONOCIMIENTO para responder con información precisa
-3. Si no sabes algo, ofrece conectar por WhatsApp: 55 1748 9261
-4. Sé amable, concisa y útil
-5. Responde en español de México`;
+- Dirección: Jacarandas 54, Col. Ahuehuetes, Tlalnepantla, Estado de México, CP 54150
+- Moneda: MXN (pesos mexicanos)`;
 
   if (knowledge) {
-    prompt += `\n\n=== BASE DE CONOCIMIENTO ===\n${knowledge}\n=== FIN DE BASE DE CONOCIMIENTO ===`;
+    prompt += `\n\nBASE DE CONOCIMIENTO DE LA CLÍNICA:\n${knowledge}`;
   }
+
   return prompt;
 }
 
-// Llamar a la IA del SDK (Z.AI)
-async function callAI(messages: Array<{ role: string; content: string }>): Promise<string> {
-  try {
-    const zai = await getZAI();
-    
-    const formattedMessages = messages.map(msg => ({
-      role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: msg.content
-    }));
+function toGeminiContents(messages: ChatMessage[]) {
+  const history = messages.filter((msg) => msg.role !== 'system');
 
-    const response = await zai.chat.completions.create({
-      messages: formattedMessages,
-      temperature: 0.7,
-      max_tokens: 500,
-    });
-
-    return response.choices?.[0]?.message?.content || 'No pude procesar eso.';
-  } catch (error: any) {
-    console.error('AI SDK Error:', error);
-    throw error;
-  }
+  return history.map((msg) => ({
+    role: msg.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: msg.content }]
+  }));
 }
 
-// POST - Chat
+async function callGemini(messages: ChatMessage[]): Promise<string> {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('Falta la variable GEMINI_API_KEY');
+  }
+
+  const systemMessage = messages.find((msg) => msg.role === 'system')?.content || '';
+  const contents = toGeminiContents(messages);
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: systemMessage }]
+        },
+        contents,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 500
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('').trim();
+
+  if (!text) {
+    throw new Error('Gemini no devolvió texto');
+  }
+
+  return text;
+}
+
+function getSmartResponse(message: string, assistantName: string, knowledge: string): string {
+  const lowerMessage = message.toLowerCase();
+
+  if (knowledge && knowledge.length > 0) {
+    const sections = knowledge.split('\n\n');
+    const keywords = lowerMessage.split(/\s+/).filter((w) => w.length > 3);
+
+    let bestSection = '';
+    let maxMatches = 0;
+
+    for (const section of sections) {
+      const sectionLower = section.toLowerCase();
+      let matches = 0;
+
+      for (const keyword of keywords) {
+        if (sectionLower.includes(keyword)) matches++;
+      }
+
+      if (matches > maxMatches) {
+        maxMatches = matches;
+        bestSection = section;
+      }
+    }
+
+    if (maxMatches >= 1 && bestSection) {
+      return `${bestSection}\n\nSi quieres, también puedo ayudarte a agendar tu cita. 🦷`;
+    }
+  }
+
+  if (lowerMessage.match(/hola|buenos d[ií]as|buenas|hey/)) {
+    return `¡Hola! 👋 Soy ${assistantName}, asistente de Clínica Dental Sonrisa Perfecta.\n\nPuedo ayudarte con tratamientos, precios, ubicación, horarios y citas. ¿Qué deseas saber?`;
+  }
+
+  if (lowerMessage.includes('cita') || lowerMessage.includes('agendar')) {
+    return 'Para agendar tu cita, usa el botón o formulario de la página. Si prefieres apoyo directo, también puedes escribir por WhatsApp al 55 1748 9261. 📅';
+  }
+
+  return `Soy ${assistantName}. Con gusto te ayudo con información de la clínica, tratamientos, horarios, pagos o citas. También puedes escribir por WhatsApp al 55 1748 9261. 🦷`;
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { message, sessionId } = await req.json();
+    await ensureDataDir();
+
+    const body = await req.json();
+    const message = body?.message?.trim();
+    const sessionId = body?.sessionId?.trim() || 'default-session';
+
     if (!message) {
       return NextResponse.json({ error: 'Mensaje requerido' }, { status: 400 });
     }
@@ -115,144 +196,53 @@ export async function POST(req: NextRequest) {
     const systemPrompt = buildSystemPrompt(config.name, knowledge);
 
     let history = conversations.get(sessionId) || [];
+
     if (history.length === 0) {
-      history.push({ role: 'assistant', content: systemPrompt });
+      history.push({ role: 'system', content: systemPrompt });
+    } else {
+      history[0] = { role: 'system', content: systemPrompt };
     }
+
     history.push({ role: 'user', content: message });
 
-    let response: string;
+    let response = '';
     let usedAI = false;
-    
+    let provider = 'fallback';
+
     try {
-      response = await callAI(history);
+      response = await callGemini(history);
       usedAI = true;
+      provider = 'gemini';
     } catch (aiError: any) {
-      console.error('AI Error, usando respaldo:', aiError.message);
+      console.error('Gemini error, usando respaldo local:', aiError?.message || aiError);
       response = getSmartResponse(message, config.name, knowledge);
     }
 
     history.push({ role: 'assistant', content: response });
-    if (history.length > 20) history = [history[0], ...history.slice(-18)];
+
+    if (history.length > 20) {
+      history = [history[0], ...history.slice(-19)];
+    }
+
     conversations.set(sessionId, history);
 
-    return NextResponse.json({ response, assistantName: config.name, usedAI });
+    return NextResponse.json({
+      response,
+      assistantName: config.name,
+      usedAI,
+      provider,
+      model: usedAI ? GEMINI_MODEL : 'fallback'
+    });
   } catch (error: any) {
     console.error('Chat error:', error);
-    return NextResponse.json({ 
-      response: 'Lo siento, hubo un error. Llama al 55 1748 9261 para atención inmediata.' 
-    });
-  }
-}
 
-// Respuestas inteligentes que usan la base de conocimiento
-function getSmartResponse(message: string, assistantName: string, knowledge: string): string {
-  const lowerMessage = message.toLowerCase();
-  
-  if (knowledge && knowledge.length > 0) {
-    const sections = knowledge.split('\n\n');
-    const keywords = lowerMessage.split(/\s+/).filter(w => w.length > 3);
-    
-    let bestSection = '';
-    let maxMatches = 0;
-    
-    for (const section of sections) {
-      const sectionLower = section.toLowerCase();
-      let matches = 0;
-      for (const keyword of keywords) {
-        if (sectionLower.includes(keyword)) matches++;
-      }
-      if (matches > maxMatches) {
-        maxMatches = matches;
-        bestSection = section;
-      }
-    }
-    
-    if (maxMatches >= 1 && bestSection) {
-      return `${bestSection}\n\n¿Hay algo más en lo que pueda ayudarte? 🦷`;
-    }
-    
-    // Búsquedas específicas
-    if (lowerMessage.includes('servicio') || lowerMessage.includes('tratamiento') || lowerMessage.includes('ofrecen') || lowerMessage.includes('hacen')) {
-      for (const section of sections) {
-        const s = section.toLowerCase();
-        if (s.includes('servicio') || s.includes('tratamiento') || s.includes('procedimiento')) {
-          return `${section}\n\n¿Te interesa más información? 🦷`;
-        }
-      }
-    }
-    
-    if (lowerMessage.includes('pago') || lowerMessage.includes('tarjeta')) {
-      for (const section of sections) {
-        const s = section.toLowerCase();
-        if (s.includes('pago') || s.includes('tarjeta') || s.includes('método')) {
-          return `${section}\n\n¿Tienes más dudas? 🦷`;
-        }
-      }
-    }
-  }
-  
-  // Respuestas por defecto
-  if (lowerMessage.match(/hola|buenos d[ií]as|buenas|hey/)) {
-    return `¡Hola! 👋 Soy ${assistantName}, tu asistente de Clínica Dental Sonrisa Perfecta.\n\n¿En qué puedo ayudarte? Puedo informarte sobre:\n• 🦷 Tratamientos y servicios\n• 💰 Precios y promociones\n• 📍 Ubicación y horarios\n• 📅 Agendar citas`;
-  }
-  
-  if (lowerMessage.includes('servicio') || lowerMessage.includes('tratamiento') || lowerMessage.includes('ofrecen')) {
-    return `🦷 **Nuestros servicios:**\n\n• Limpieza dental profesional\n• Blanqueamiento dental\n• Ortodoncia (brackets e invisible)\n• Implantes dentales\n• Endodoncia (tratamiento de conducto)\n• Extracciones\n• Coronas y carillas\n• Diseño de sonrisa\n\n¿Te interesa información sobre algún tratamiento específico?`;
-  }
-  
-  if (lowerMessage.includes('precio') || lowerMessage.includes('costo') || lowerMessage.includes('cuánto')) {
-    return `💰 **Precios (MXN):**\n\n• Valoración: GRATIS\n• Limpieza: $499 MXN\n• Blanqueamiento: $3,500 MXN\n• Ortodoncia: Desde $15,000 MXN\n\n🎉 Pregunta por nuestras promociones vigentes.\n\n¿Te gustaría agendar una valoración gratuita?`;
-  }
-  
-  if (lowerMessage.includes('pago') || lowerMessage.includes('tarjeta')) {
-    return `💳 **Formas de pago:**\n\n• Efectivo\n• Tarjetas de crédito y débito (Visa, Mastercard, American Express)\n• Transferencia bancaria\n• Meses sin intereses\n\n¿Necesitas más información?`;
-  }
-  
-  if (lowerMessage.includes('sucursal') || lowerMessage.includes('ubicación') || lowerMessage.includes('dónde') || lowerMessage.includes('dirección')) {
-    return `📍 **Ubicación:**\n\nJacarandas 54, Col. Ahuehuetes\nTlalnepantla, Edo. Méx. CP 54150\n\n📞 WhatsApp: 55 1748 9261\n\nPor ahora contamos con una sola sucursal. ¿Necesitas ayuda para llegar?`;
-  }
-  
-  if (lowerMessage.includes('horario')) {
-    return `🕐 **Horarios:**\n\n• Lunes a Viernes: 9:00 AM - 8:00 PM\n• Sábados: 9:00 AM - 2:00 PM\n• Domingos: Cerrado\n\n¿Te gustaría agendar una cita?`;
-  }
-  
-  if (lowerMessage.includes('cita') || lowerMessage.includes('agendar')) {
-    return `📅 **Para agendar tu cita:**\n\n1. Haz clic en el botón verde "Agendar Cita" en la página\n2. Selecciona fecha y hora\n3. Ingresa tus datos\n4. ¡Listo!\n\nO llámanos al **55 1748 9261** 📞`;
-  }
-  
-  return `Gracias por tu mensaje. Soy ${assistantName} 🦷\n\nPuedo ayudarte con información sobre:\n• Tratamientos y servicios\n• Precios y promociones\n• Ubicación y horarios\n• Agendar citas\n\n¿En qué puedo ayudarte? O llámanos al **55 1748 9261** 📞`;
-}
-
-// GET - Get config
-export async function GET() {
-  try {
-    const config = await getConfig();
-    return NextResponse.json(config);
-  } catch {
-    return NextResponse.json(DEFAULT_CONFIG);
-  }
-}
-
-// PUT - Update config
-export async function PUT(req: NextRequest) {
-  try {
-    const data = await req.json();
-    const config = {
-      name: data.name || DEFAULT_CONFIG.name,
-      title: data.title || DEFAULT_CONFIG.title,
-      welcomeMessage: data.welcomeMessage || DEFAULT_CONFIG.welcomeMessage,
-      headerColor: data.headerColor || DEFAULT_CONFIG.headerColor,
-      buttonColor: data.buttonColor || DEFAULT_CONFIG.buttonColor,
-      buttonIcon: data.buttonIcon || DEFAULT_CONFIG.buttonIcon,
-      avatar: data.avatar || DEFAULT_CONFIG.avatar,
-      position: data.position || DEFAULT_CONFIG.position,
-      isActive: data.isActive ?? DEFAULT_CONFIG.isActive
-    };
-    
-    await saveConfig(config);
-    return NextResponse.json({ success: true, config, message: 'Guardado correctamente' });
-  } catch (error) {
-    console.error('Error saving config:', error);
-    return NextResponse.json({ success: false, error: 'Error al guardar' }, { status: 500 });
+    return NextResponse.json(
+      {
+        response: 'Lo siento, hubo un problema al responder. Revisa la configuración de Gemini o contacta por WhatsApp al 55 1748 9261.',
+        usedAI: false,
+        provider: 'error'
+      },
+      { status: 500 }
+    );
   }
 }
