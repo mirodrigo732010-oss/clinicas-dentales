@@ -50,67 +50,58 @@ async function getKnowledge() {
 function buildSystemPrompt(name: string, knowledge: string): string {
   let prompt = `Eres ${name}, un asistente virtual amable y profesional de la Clínica Dental Sonrisa Perfecta.
 
-INFORMACIÓN DE CONTACTO:
+INFORMACIÓN IMPORTANTE:
 - Teléfono: 5517489261
-- Dirección: Jacarandas 54 Col. Ahuehuetes, Tlalnepantla, Edo. Méx. CP 54150
 - WhatsApp: +52 55 1748 9261
+- Dirección: Jacarandas 54 Col. Ahuehuetes, Tlalnepantla, Edo. Méx. CP 54150
+- Moneda: MXN (Pesos Mexicanos)
 
-REGLAS:
+INSTRUCCIONES:
 1. Saluda de manera cálida y profesional
-2. Usa tono cercano y empático
-3. Sé concisa pero completa
-4. USA LA BASE DE CONOCIMIENTO para responder con precisión
-5. Si preguntan por ubicación, da la dirección completa
-6. SIEMPRE responde basándote en la información de la BASE DE CONOCIMIENTO`;
+2. USA LA BASE DE CONOCIMIENTO para responder con información precisa
+3. Si no sabes algo, ofrece conectar por WhatsApp: 55 1748 9261
+4. Sé amable, concisa y útil
+5. Responde en español de México`;
 
   if (knowledge) {
-    prompt += `\n\n📚 BASE DE CONOCIMIENTO (USA ESTA INFORMACIÓN PARA RESPONDER):\n${knowledge}`;
+    prompt += `\n\n=== BASE DE CONOCIMIENTO ===\n${knowledge}\n=== FIN DE BASE DE CONOCIMIENTO ===`;
   }
   return prompt;
 }
 
-// Llamar a OpenAI API
-async function callOpenAI(messages: Array<{ role: string; content: string }>) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  
-  console.log('🔑 Verificando OPENAI_API_KEY:', apiKey ? 'Configurada (' + apiKey.substring(0, 10) + '...)' : 'NO CONFIGURADA');
+// Llamar a OpenRouter API (funciona en México y todas las regiones)
+async function callOpenRouter(messages: Array<{ role: string; content: string }>): Promise<string> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
   
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY no configurada en variables de entorno');
+    throw new Error('OPENROUTER_API_KEY no configurada');
   }
 
-  // Formatear mensajes para OpenAI
-  const formattedMessages = [
-    ...messages.map(msg => ({
-      role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: msg.content
-    }))
-  ];
-
-  console.log('📤 Enviando a OpenAI:', formattedMessages.length, 'mensajes');
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://clinicas-dentales.com',
+      'X-Title': 'Clinica Dental Sonrisa Perfecta',
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini', // Modelo económico y rápido
-      messages: formattedMessages,
+      model: 'meta-llama/llama-3.1-8b-instruct:free', // Modelo gratis
+      messages: messages.map(msg => ({
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content
+      })),
       temperature: 0.7,
-      max_tokens: 1024,
+      max_tokens: 500,
     }),
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    console.error('❌ OpenAI API error:', response.status, errorText);
-    throw new Error(`Error de OpenAI: ${response.status} - ${errorText}`);
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(`OpenRouter error ${response.status}: ${errorData.error?.message || 'Unknown error'}`);
   }
 
   const data = await response.json();
-  console.log('✅ OpenAI response recibida');
   return data.choices?.[0]?.message?.content || 'No pude procesar eso.';
 }
 
@@ -122,8 +113,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Mensaje requerido' }, { status: 400 });
     }
 
-    console.log('📩 Mensaje recibido:', message);
-
     const [config, knowledge] = await Promise.all([getConfig(), getKnowledge()]);
     const systemPrompt = buildSystemPrompt(config.name, knowledge);
 
@@ -134,98 +123,126 @@ export async function POST(req: NextRequest) {
     history.push({ role: 'user', content: message });
 
     let response: string;
+    let usedAI = false;
     
     try {
-      // Intentar usar OpenAI
-      console.log('🤖 Llamando a OpenAI...');
-      response = await callOpenAI(history);
-      console.log('✅ Respuesta de OpenAI:', response.substring(0, 100) + '...');
+      response = await callOpenRouter(history);
+      usedAI = true;
     } catch (aiError: any) {
-      console.error('❌ AI Error:', aiError.message);
-      
-      // Si la IA falla, usar respuestas de respaldo
-      console.log('🔄 Usando respuestas de respaldo...');
-      response = getFallbackResponse(message, config.name, knowledge);
+      response = getSmartResponse(message, config.name, knowledge);
     }
 
     history.push({ role: 'assistant', content: response });
     if (history.length > 20) history = [history[0], ...history.slice(-18)];
     conversations.set(sessionId, history);
 
-    return NextResponse.json({ response, assistantName: config.name });
+    return NextResponse.json({ response, assistantName: config.name, usedAI });
   } catch (error: any) {
-    console.error('❌ Chat error:', error);
     return NextResponse.json({ 
       response: 'Lo siento, hubo un error. Llama al 55 1748 9261 para atención inmediata.' 
     });
   }
 }
 
-// Respuestas de respaldo si la IA falla
-function getFallbackResponse(message: string, assistantName: string, knowledge: string): string {
+// Respuestas inteligentes que usan la base de conocimiento
+function getSmartResponse(message: string, assistantName: string, knowledge: string): string {
   const lowerMessage = message.toLowerCase();
   
-  // Buscar en la base de conocimiento
-  if (knowledge) {
-    const knowledgeLower = knowledge.toLowerCase();
+  if (knowledge && knowledge.length > 0) {
+    const sections = knowledge.split('\n\n');
+    const keywords = lowerMessage.split(/\s+/).filter(w => w.length > 3);
     
-    // Formas de pago
-    if (lowerMessage.includes('pago') || lowerMessage.includes('tarjeta') || lowerMessage.includes('efectivo')) {
-      if (knowledgeLower.includes('pago') || knowledgeLower.includes('tarjeta')) {
-        const lines = knowledge.split('\n');
-        let pagoInfo = '';
-        let capturing = false;
-        for (const line of lines) {
-          if (line.toLowerCase().includes('pago') || line.toLowerCase().includes('tarjeta') || line.toLowerCase().includes('método')) {
-            capturing = true;
-          }
-          if (capturing) {
-            pagoInfo += line + '\n';
-            if (line.trim() === '' && pagoInfo.length > 50) break;
-          }
-        }
-        if (pagoInfo) {
-          return `💳 **Formas de pago:**\n\n${pagoInfo}\n\n¿Tienes alguna otra duda?`;
+    let bestSection = '';
+    let maxMatches = 0;
+    
+    for (const section of sections) {
+      const sectionLower = section.toLowerCase();
+      let matches = 0;
+      for (const keyword of keywords) {
+        if (sectionLower.includes(keyword)) matches++;
+      }
+      if (matches > maxMatches) {
+        maxMatches = matches;
+        bestSection = section;
+      }
+    }
+    
+    if (maxMatches >= 1 && bestSection) {
+      return `${bestSection}\n\n¿Hay algo más en lo que pueda ayudarte? 🦷`;
+    }
+    
+    // Búsquedas específicas
+    if (lowerMessage.includes('servicio') || lowerMessage.includes('tratamiento') || lowerMessage.includes('ofrecen') || lowerMessage.includes('hacen')) {
+      for (const section of sections) {
+        const s = section.toLowerCase();
+        if (s.includes('servicio') || s.includes('tratamiento') || s.includes('procedimiento')) {
+          return `${section}\n\n¿Te interesa más información? 🦷`;
         }
       }
     }
     
-    // Buscar por palabras clave en el conocimiento
-    const keywords = lowerMessage.split(' ').filter(w => w.length > 3);
-    for (const keyword of keywords) {
-      if (knowledgeLower.includes(keyword)) {
-        const sections = knowledge.split('\n\n');
-        for (const section of sections) {
-          if (section.toLowerCase().includes(keyword)) {
-            return `${section}\n\n¿Hay algo más en lo que pueda ayudarte?`;
-          }
+    if (lowerMessage.includes('pago') || lowerMessage.includes('tarjeta')) {
+      for (const section of sections) {
+        const s = section.toLowerCase();
+        if (s.includes('pago') || s.includes('tarjeta') || s.includes('método')) {
+          return `${section}\n\n¿Tienes más dudas? 🦷`;
+        }
+      }
+    }
+    
+    if (lowerMessage.includes('precio') || lowerMessage.includes('costo') || lowerMessage.includes('cuánto')) {
+      for (const section of sections) {
+        const s = section.toLowerCase();
+        if (s.includes('precio') || s.includes('costo') || s.includes('$')) {
+          return `${section}\n\n¿Te gustaría agendar una valoración gratuita? 🦷`;
+        }
+      }
+    }
+    
+    if (lowerMessage.includes('sucursal') || lowerMessage.includes('ubicación') || lowerMessage.includes('dónde')) {
+      return `📍 **Ubicación:**\n\nJacarandas 54, Col. Ahuehuetes\nTlalnepantla, Edo. Méx. CP 54150\n\n📞 WhatsApp: 55 1748 9261\n\nPor ahora contamos con una sola sucursal. ¿Necesitas ayuda para llegar?`;
+    }
+    
+    if (lowerMessage.includes('horario')) {
+      for (const section of sections) {
+        const s = section.toLowerCase();
+        if (s.includes('horario') || s.includes('hora') || s.includes('abierto')) {
+          return `${section}\n\n¿Te gustaría agendar una cita? 🦷`;
         }
       }
     }
   }
   
   // Respuestas por defecto
+  if (lowerMessage.match(/hola|buenos d[ií]as|buenas|hey/)) {
+    return `¡Hola! 👋 Soy ${assistantName}, tu asistente de Clínica Dental Sonrisa Perfecta.\n\n¿En qué puedo ayudarte? Puedo informarte sobre:\n• 🦷 Tratamientos y servicios\n• 💰 Precios y promociones\n• 📍 Ubicación y horarios\n• 📅 Agendar citas`;
+  }
+  
+  if (lowerMessage.includes('servicio') || lowerMessage.includes('tratamiento') || lowerMessage.includes('ofrecen')) {
+    return `🦷 **Nuestros servicios:**\n\n• Limpieza dental profesional\n• Blanqueamiento dental\n• Ortodoncia (brackets e invisible)\n• Implantes dentales\n• Endodoncia (tratamiento de conducto)\n• Extracciones\n• Coronas y carillas\n• Diseño de sonrisa\n\n¿Te interesa información sobre algún tratamiento específico?`;
+  }
+  
+  if (lowerMessage.includes('precio') || lowerMessage.includes('costo') || lowerMessage.includes('cuánto')) {
+    return `💰 **Precios (MXN):**\n\n• Valoración: GRATIS\n• Limpieza: $499 MXN\n• Blanqueamiento: $3,500 MXN\n• Ortodoncia: Desde $15,000 MXN\n\n🎉 Pregunta por nuestras promociones vigentes.\n\n¿Te gustaría agendar una valoración gratuita?`;
+  }
+  
   if (lowerMessage.includes('pago') || lowerMessage.includes('tarjeta')) {
-    return `💳 **Formas de pago:**\n\n• Efectivo\n• Tarjetas de crédito y débito (Visa, Mastercard, American Express)\n• Transferencia bancaria\n• Pagos a meses sin intereses con tarjetas participantes\n\n¿Necesitas más información?`;
+    return `💳 **Formas de pago:**\n\n• Efectivo\n• Tarjetas de crédito y débito (Visa, Mastercard, American Express)\n• Transferencia bancaria\n• Meses sin intereses\n\n¿Necesitas más información?`;
   }
   
-  if (lowerMessage.match(/hola|buenos d[ií]as|buenas/)) {
-    return `¡Hola! 👋 Soy ${assistantName}, tu asistente de Clínica Dental Sonrisa Perfecta. ¿En qué puedo ayudarte?`;
-  }
-  
-  if (lowerMessage.includes('precio') || lowerMessage.includes('costo')) {
-    return `💰 **Precios:**\n\n• Valoración: GRATIS\n• Limpieza: $499 MXN\n• Blanqueamiento: $3,500 MXN\n\n¿Te gustaría más información?`;
-  }
-  
-  if (lowerMessage.includes('ubicación') || lowerMessage.includes('dirección') || lowerMessage.includes('dónde')) {
-    return `📍 **Ubicación:**\n\nJacarandas 54, Col. Ahuehuetes\nTlalnepantla, Edo. Méx. CP 54150\n\n📞 Llámanos: 55 1748 9261`;
+  if (lowerMessage.includes('sucursal') || lowerMessage.includes('ubicación') || lowerMessage.includes('dónde') || lowerMessage.includes('dirección')) {
+    return `📍 **Ubicación:**\n\nJacarandas 54, Col. Ahuehuetes\nTlalnepantla, Edo. Méx. CP 54150\n\n📞 WhatsApp: 55 1748 9261\n\nPor ahora contamos con una sola sucursal. ¿Necesitas ayuda para llegar?`;
   }
   
   if (lowerMessage.includes('horario')) {
-    return `🕐 **Horarios:**\n\n• Lunes a Viernes: 9:00 AM - 8:00 PM\n• Sábados: 9:00 AM - 2:00 PM\n• Domingos: Cerrado`;
+    return `🕐 **Horarios:**\n\n• Lunes a Viernes: 9:00 AM - 8:00 PM\n• Sábados: 9:00 AM - 2:00 PM\n• Domingos: Cerrado\n\n¿Te gustaría agendar una cita?`;
   }
   
-  return `Gracias por tu mensaje. Soy ${assistantName}. Para atenderte mejor, llámanos al **55 1748 9261** o cuéntame qué necesitas y te ayudo con gusto.`;
+  if (lowerMessage.includes('cita') || lowerMessage.includes('agendar')) {
+    return `📅 **Para agendar tu cita:**\n\n1. Haz clic en el botón verde "Agendar Cita" en la página\n2. Selecciona fecha y hora\n3. Ingresa tus datos\n4. ¡Listo!\n\nO llámanos al **55 1748 9261** 📞`;
+  }
+  
+  return `Gracias por tu mensaje. Soy ${assistantName} 🦷\n\nPuedo ayudarte con información sobre:\n• Tratamientos y servicios\n• Precios y promociones\n• Ubicación y horarios\n• Agendar citas\n\n¿En qué puedo ayudarte? O llámanos al **55 1748 9261** 📞`;
 }
 
 // GET - Get config
