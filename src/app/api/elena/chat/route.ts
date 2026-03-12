@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFile, writeFile, access, mkdir } from 'fs/promises';
 import { join } from 'path';
+import ZAI from 'z-ai-web-dev-sdk';
 
 const DATA_DIR = join(process.cwd(), 'data');
 const CONFIG_FILE = join(DATA_DIR, 'assistant-config.json');
@@ -21,6 +22,16 @@ const DEFAULT_CONFIG = {
 
 // In-memory conversations
 const conversations = new Map<string, Array<{ role: string; content: string }>>();
+
+// ZAI instance (se crea una vez)
+let zaiInstance: any = null;
+
+async function getZAI() {
+  if (!zaiInstance) {
+    zaiInstance = await ZAI.create();
+  }
+  return zaiInstance;
+}
 
 // Helper functions
 async function ensureDataDir() {
@@ -69,40 +80,27 @@ INSTRUCCIONES:
   return prompt;
 }
 
-// Llamar a OpenRouter API (funciona en México y todas las regiones)
-async function callOpenRouter(messages: Array<{ role: string; content: string }>): Promise<string> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  
-  if (!apiKey) {
-    throw new Error('OPENROUTER_API_KEY no configurada');
-  }
+// Llamar a la IA del SDK (Z.AI)
+async function callAI(messages: Array<{ role: string; content: string }>): Promise<string> {
+  try {
+    const zai = await getZAI();
+    
+    const formattedMessages = messages.map(msg => ({
+      role: msg.role === 'assistant' ? 'assistant' : 'user',
+      content: msg.content
+    }));
 
-  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': 'https://clinicas-dentales.com',
-      'X-Title': 'Clinica Dental Sonrisa Perfecta',
-    },
-    body: JSON.stringify({
-      model: 'meta-llama/llama-3.1-8b-instruct:free', // Modelo gratis
-      messages: messages.map(msg => ({
-        role: msg.role === 'assistant' ? 'assistant' : 'user',
-        content: msg.content
-      })),
+    const response = await zai.chat.completions.create({
+      messages: formattedMessages,
       temperature: 0.7,
       max_tokens: 500,
-    }),
-  });
+    });
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(`OpenRouter error ${response.status}: ${errorData.error?.message || 'Unknown error'}`);
+    return response.choices?.[0]?.message?.content || 'No pude procesar eso.';
+  } catch (error: any) {
+    console.error('AI SDK Error:', error);
+    throw error;
   }
-
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || 'No pude procesar eso.';
 }
 
 // POST - Chat
@@ -126,9 +124,10 @@ export async function POST(req: NextRequest) {
     let usedAI = false;
     
     try {
-      response = await callOpenRouter(history);
+      response = await callAI(history);
       usedAI = true;
     } catch (aiError: any) {
+      console.error('AI Error, usando respaldo:', aiError.message);
       response = getSmartResponse(message, config.name, knowledge);
     }
 
@@ -138,6 +137,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ response, assistantName: config.name, usedAI });
   } catch (error: any) {
+    console.error('Chat error:', error);
     return NextResponse.json({ 
       response: 'Lo siento, hubo un error. Llama al 55 1748 9261 para atención inmediata.' 
     });
@@ -186,28 +186,6 @@ function getSmartResponse(message: string, assistantName: string, knowledge: str
         const s = section.toLowerCase();
         if (s.includes('pago') || s.includes('tarjeta') || s.includes('método')) {
           return `${section}\n\n¿Tienes más dudas? 🦷`;
-        }
-      }
-    }
-    
-    if (lowerMessage.includes('precio') || lowerMessage.includes('costo') || lowerMessage.includes('cuánto')) {
-      for (const section of sections) {
-        const s = section.toLowerCase();
-        if (s.includes('precio') || s.includes('costo') || s.includes('$')) {
-          return `${section}\n\n¿Te gustaría agendar una valoración gratuita? 🦷`;
-        }
-      }
-    }
-    
-    if (lowerMessage.includes('sucursal') || lowerMessage.includes('ubicación') || lowerMessage.includes('dónde')) {
-      return `📍 **Ubicación:**\n\nJacarandas 54, Col. Ahuehuetes\nTlalnepantla, Edo. Méx. CP 54150\n\n📞 WhatsApp: 55 1748 9261\n\nPor ahora contamos con una sola sucursal. ¿Necesitas ayuda para llegar?`;
-    }
-    
-    if (lowerMessage.includes('horario')) {
-      for (const section of sections) {
-        const s = section.toLowerCase();
-        if (s.includes('horario') || s.includes('hora') || s.includes('abierto')) {
-          return `${section}\n\n¿Te gustaría agendar una cita? 🦷`;
         }
       }
     }
