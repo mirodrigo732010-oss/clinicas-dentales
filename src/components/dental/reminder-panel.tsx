@@ -299,19 +299,19 @@ export function ReminderPanel() {
 
       {/* Contenido */}
       {activeTab === 'config' ? (
-        <Card className="bg-gray-800 border-gray-700">
-          <CardHeader>
-            <CardTitle className="text-white">Configuración de Recordatorios</CardTitle>
-            <CardDescription>
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardHeader className="border-b bg-gradient-to-br from-sky-50 to-white">
+            <CardTitle className="text-slate-900">Configuración de Recordatorios</CardTitle>
+            <CardDescription className="text-slate-600">
               Personaliza cuándo y cómo se envían los recordatorios
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
+          <CardContent className="space-y-6 p-6">
             {/* Activar/Desactivar */}
-            <div className="flex items-center justify-between p-4 bg-gray-700/50 rounded-lg">
+            <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm">
               <div>
-                <Label className="text-white font-medium">Sistema de Recordatorios</Label>
-                <p className="text-sm text-gray-400">Activa o desactiva todos los recordatorios</p>
+                <Label className="text-slate-900 font-medium">Sistema de Recordatorios</Label>
+                <p className="text-sm text-slate-600">Activa o desactiva todos los recordatorios</p>
               </div>
               <Switch
                 checked={config?.isActive ?? true}
@@ -321,24 +321,24 @@ export function ReminderPanel() {
 
             {/* Tipos de recordatorio */}
             <div className="space-y-3">
-              <Label className="text-white font-medium">Momento de envío</Label>
+              <Label className="text-slate-900 font-medium">Momento de envío</Label>
               <div className="grid gap-3">
-                <div className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
-                  <span className="text-gray-300">24 horas antes de la cita</span>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <span className="font-medium text-slate-800">24 horas antes de la cita</span>
                   <Switch
                     checked={config?.reminder24hEnabled ?? true}
                     onCheckedChange={(checked) => updateConfig({ reminder24hEnabled: checked })}
                   />
                 </div>
-                <div className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
-                  <span className="text-gray-300">2 horas antes de la cita</span>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <span className="font-medium text-slate-800">2 horas antes de la cita</span>
                   <Switch
                     checked={config?.reminder2hEnabled ?? true}
                     onCheckedChange={(checked) => updateConfig({ reminder2hEnabled: checked })}
                   />
                 </div>
-                <div className="flex items-center justify-between p-3 bg-gray-700/50 rounded-lg">
-                  <span className="text-gray-300">1 hora antes de la cita</span>
+                <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  <span className="font-medium text-slate-800">1 hora antes de la cita</span>
                   <Switch
                     checked={config?.reminder1hEnabled ?? false}
                     onCheckedChange={(checked) => updateConfig({ reminder1hEnabled: checked })}
@@ -349,14 +349,14 @@ export function ReminderPanel() {
 
             {/* Plantilla de mensaje */}
             <div className="space-y-3">
-              <Label className="text-white font-medium">Plantilla de WhatsApp</Label>
-              <p className="text-sm text-gray-400">
+              <Label className="text-slate-900 font-medium">Plantilla de WhatsApp</Label>
+              <p className="text-sm text-slate-600">
                 Variables: {'{nombre}'}, {'{fecha}'}, {'{hora}'}, {'{tratamiento}'}
               </p>
               <Textarea
                 value={config?.whatsappTemplate || ''}
                 onChange={(e) => updateConfig({ whatsappTemplate: e.target.value })}
-                className="bg-gray-700 border-gray-600 text-white min-h-[100px]"
+                className="min-h-[120px] rounded-2xl border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:ring-[#0077B6]"
                 placeholder="¡Hola {nombre}! Te recordamos tu cita..."
               />
             </div>
@@ -364,19 +364,19 @@ export function ReminderPanel() {
             {/* Datos de la clínica */}
             <div className="grid md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label className="text-white">Nombre de la clínica</Label>
+                <Label className="text-slate-900">Nombre de la clínica</Label>
                 <Input
                   value={config?.clinicName || ''}
                   onChange={(e) => updateConfig({ clinicName: e.target.value })}
-                  className="bg-gray-700 border-gray-600 text-white"
+                  className="rounded-xl border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:ring-[#0077B6]"
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-white">Teléfono de la clínica</Label>
+                <Label className="text-slate-900">Teléfono de la clínica</Label>
                 <Input
                   value={config?.clinicPhone || ''}
                   onChange={(e) => updateConfig({ clinicPhone: e.target.value })}
-                  className="bg-gray-700 border-gray-600 text-white"
+                  className="rounded-xl border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus-visible:ring-[#0077B6]"
                 />
               </div>
             </div>
