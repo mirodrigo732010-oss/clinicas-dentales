@@ -122,10 +122,11 @@ model Prompt {
   updatedAt DateTime @updatedAt
 }
 
-// Base de conocimiento para Elena
+// Base de conocimiento para Elena (información privada del doctor)
+// Un solo registro con todo el conocimiento acumulado
 model KnowledgeBase {
   id        String   @id @default(cuid())
-  content   String
+  content   String   // Todo el conocimiento en un solo campo de texto
   updatedAt DateTime @updatedAt
 }
 
@@ -133,10 +134,10 @@ model KnowledgeBase {
 model KnowledgeSource {
   id          String   @id @default(cuid())
   type        String   // "text", "pdf", "web"
-  title       String
-  content     String
-  sourceUrl   String?
-  fileName    String?
+  title       String   // Nombre descriptivo
+  content     String   // Contenido extraído
+  sourceUrl   String?  // URL si es web
+  fileName    String?  // Nombre del archivo si es PDF
   addedAt     DateTime @default(now())
 
   @@index([type])
@@ -145,13 +146,13 @@ model KnowledgeSource {
 // Configuración del asistente virtual
 model AssistantConfig {
   id              String   @id @default(cuid())
-  name            String   @default("Elena")
-  title           String   @default("Asistente Virtual")
-  welcomeMessage  String   @default("¡Hola! ¿En qué puedo ayudarte?")
-  headerColor     String   @default("#0077B6")
-  buttonColor     String   @default("#0077B6")
-  buttonIcon      String   @default("message-circle")
-  position        String   @default("bottom-right")
+  name            String   @default("Elena") // Nombre del asistente
+  title           String   @default("Asistente Virtual") // Título que aparece en el botón
+  welcomeMessage  String   @default("¡Hola! ¿En qué puedo ayudarte?") // Mensaje de bienvenida
+  headerColor     String   @default("#0077B6") // Color de fondo del header
+  buttonColor     String   @default("#0077B6") // Color del botón flotante
+  buttonIcon      String   @default("message-circle") // Icono del botón
+  position        String   @default("bottom-right") // Posición: bottom-right, bottom-left
   isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -162,13 +163,13 @@ model Reminder {
   id             String      @id @default(cuid())
   appointmentId  String
   appointment    Appointment @relation(fields: [appointmentId], references: [id])
-  type           String      // "24h", "2h", "1h"
-  scheduledFor   DateTime
-  status         String      @default("pending")
-  channel        String      @default("whatsapp")
-  message        String
-  sentAt         DateTime?
-  error          String?
+  type           String      // "24h", "2h", "1h" - horas antes de la cita
+  scheduledFor   DateTime    // Cuándo debe enviarse
+  status         String      @default("pending") // pending, sent, failed, cancelled
+  channel        String      @default("whatsapp") // whatsapp, sms, email
+  message        String      // Mensaje enviado
+  sentAt         DateTime?   // Cuándo se envió realmente
+  error          String?     // Error si falló
   createdAt      DateTime    @default(now())
 
   @@index([status, scheduledFor])
@@ -183,8 +184,8 @@ model ReminderConfig {
   reminder24hEnabled  Boolean  @default(true)
   reminder2hEnabled   Boolean  @default(true)
   reminder1hEnabled   Boolean  @default(false)
-  whatsappTemplate    String   @default("¡Hola {nombre}! Te recordamos tu cita.")
-  smsTemplate         String   @default("Recordatorio: Cita dental {fecha} {hora}.")
+  whatsappTemplate    String   @default("¡Hola {nombre}! Te recordamos tu cita en Clínica Dental Sonrisa Perfecta el {fecha} a las {hora} para {tratamiento}. Confirma respondiendo este mensaje.")
+  smsTemplate         String   @default("Recordatorio: Cita dental {fecha} {hora}. Confirma al 5517489261")
   clinicPhone         String   @default("5517489261")
   clinicName          String   @default("Clínica Dental Sonrisa Perfecta")
   createdAt           DateTime @default(now())

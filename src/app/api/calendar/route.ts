@@ -228,8 +228,6 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const date = searchParams.get('date');
     const view = searchParams.get('view');
-    const startDate = searchParams.get('startDate');
-    const endDate = searchParams.get('endDate');
 
     // Doctor view: get all appointments for date
     if (view === 'doctor' && date) {
@@ -239,17 +237,6 @@ export async function GET(req: NextRequest) {
       );
 
       return NextResponse.json({ appointments: activeAppointments });
-    }
-
-    // Get appointments by date range (for calendar view)
-    if (startDate && endDate) {
-      const allAppointments = await appointmentsApi.getAll();
-      const filteredAppointments = allAppointments.filter(
-        (a: { date: string; status: string }) => 
-          a.date >= startDate && a.date <= endDate && a.status !== 'cancelled'
-      );
-
-      return NextResponse.json({ appointments: filteredAppointments });
     }
 
     // Patient view: get available slots for a specific date

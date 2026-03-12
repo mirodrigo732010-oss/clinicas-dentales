@@ -4,11 +4,9 @@ set -e
 echo "🦷 Iniciando Clínica Dental Sonrisa Perfecta..."
 echo "📅 $(date)"
 
-# Crear directorios necesarios
+# Crear directorio de base de datos si no existe
 mkdir -p /app/.next/standalone/prisma/db
-mkdir -p /app/.next/standalone/data
 chmod -R 777 /app/.next/standalone/prisma/db 2>/dev/null || true
-chmod -R 777 /app/.next/standalone/data 2>/dev/null || true
 
 # Ir al directorio de la aplicación
 cd /app/.next/standalone

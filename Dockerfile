@@ -1,4 +1,4 @@
-# Dockerfile para EasyPanel - Clínica Dental
+# Dockerfile para EasyPanel - Clínica Dental Sonrisa Perfecta
 FROM node:20-alpine
 
 # Instalar dependencias del sistema
@@ -7,7 +7,7 @@ RUN apk add --no-cache libc6-compat openssl
 # Crear directorio de trabajo
 WORKDIR /app
 
-# Copiar archivos de dependencias
+# Copiar archivos de dependencias primero (para cachear)
 COPY package.json ./
 COPY prisma ./prisma/
 
@@ -23,22 +23,18 @@ COPY . .
 # Construir la aplicación
 RUN npm run build
 
-# Copiar archivos estáticos
+# Copiar archivos estáticos a standalone (requerido para Next.js)
 RUN cp -r .next/static .next/standalone/.next/ && \
     cp -r public .next/standalone/
 
-# Crear directorio para la base de datos
+# Crear directorio para la base de datos con permisos
 RUN mkdir -p /app/.next/standalone/prisma/db && \
     chmod -R 777 /app/.next/standalone/prisma
-
-# Crear directorio para datos
-RUN mkdir -p /app/.next/standalone/data && \
-    chmod -R 777 /app/.next/standalone/data
 
 # Exponer puerto
 EXPOSE 3000
 
-# Variables de entorno
+# Variables de entorno por defecto
 ENV NODE_ENV=production
 ENV DATABASE_URL="file:/app/.next/standalone/prisma/db/clinica.db"
 ENV PORT=3000
