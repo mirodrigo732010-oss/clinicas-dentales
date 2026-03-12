@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+*.log
+.env
+.env.*
+!.env.example
+db/*.db
+prisma/db/*.db
+upload
+download
+mini-services
+examples
+skills
+*.zip

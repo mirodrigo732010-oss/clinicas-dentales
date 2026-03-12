@@ -1,0 +1,12 @@
+{
+  "name": "Elena",
+  "title": "Asistente Virtual",
+  "welcomeMessage": "¡Hola! ¿En qué puedo ayudarte?",
+  "headerColor": "#0077B6",
+  "buttonColor": "#0077B6",
+  "buttonIcon": "stethoscope",
+  "avatar": "woman-doctor",
+  "position": "bottom-right",
+  "isActive": true,
+  "updatedAt": "2026-03-11T00:40:11.614Z"
+}

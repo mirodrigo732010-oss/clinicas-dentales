@@ -1,0 +1,192 @@
+// Prisma schema para SQLite (VPS/Contabo/EasyPanel)
+// Base de datos local, sin configuración externa
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Usuario/Paciente
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String?
+  phone        String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  appointments Appointment[]
+}
+
+// Citas dentales
+model Appointment {
+  id           String     @id @default(cuid())
+  patientName  String
+  patientEmail String?
+  patientPhone String
+  date         String     // YYYY-MM-DD format
+  time         String     // HH:MM format
+  treatment    String     @default("Valoración inicial")
+  notes        String?
+  status       String     @default("confirmed") // pending, confirmed, cancelled, completed
+  userId       String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  user         User?      @relation(fields: [userId], references: [id])
+  reminders    Reminder[]
+
+  @@index([date, time])
+  @@index([status])
+  @@index([date])
+}
+
+// Conversaciones con Elena
+model Conversation {
+  id        String   @id @default(cuid())
+  sessionId String   @unique
+  messages  String   // JSON stringified messages
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Usuarios administradores
+model AdminUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String?
+  role         String    @default("admin")
+  lastLogin    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// Prompts del sistema para Elena
+model SystemPrompt {
+  id        String   @id @default(cuid())
+  section   String   @unique
+  prompt    String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Preguntas frecuentes (FAQs)
+model FAQ {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  category  String   @default("general")
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([order])
+}
+
+// Disponibilidad del doctor
+model DoctorAvailability {
+  id         String   @id @default(cuid())
+  dayOfWeek  Int      @unique // 0 = Domingo, 1 = Lunes, ..., 6 = Sábado
+  startTime  String   // HH:MM
+  endTime    String   // HH:MM
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Horarios bloqueados
+model BlockedSlot {
+  id        String   @id @default(cuid())
+  date      String   // YYYY-MM-DD
+  time      String   // HH:MM
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([date, time])
+  @@index([date])
+}
+
+// Prompts configurables para Elena
+model Prompt {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  content   String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Base de conocimiento para Elena
+model KnowledgeBase {
+  id        String   @id @default(cuid())
+  content   String
+  updatedAt DateTime @updatedAt
+}
+
+// Historial de fuentes importadas
+model KnowledgeSource {
+  id          String   @id @default(cuid())
+  type        String   // "text", "pdf", "web"
+  title       String
+  content     String
+  sourceUrl   String?
+  fileName    String?
+  addedAt     DateTime @default(now())
+
+  @@index([type])
+}
+
+// Configuración del asistente virtual
+model AssistantConfig {
+  id              String   @id @default(cuid())
+  name            String   @default("Elena")
+  title           String   @default("Asistente Virtual")
+  welcomeMessage  String   @default("¡Hola! ¿En qué puedo ayudarte?")
+  headerColor     String   @default("#0077B6")
+  buttonColor     String   @default("#0077B6")
+  buttonIcon      String   @default("message-circle")
+  position        String   @default("bottom-right")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Recordatorios de citas
+model Reminder {
+  id             String      @id @default(cuid())
+  appointmentId  String
+  appointment    Appointment @relation(fields: [appointmentId], references: [id])
+  type           String      // "24h", "2h", "1h"
+  scheduledFor   DateTime
+  status         String      @default("pending")
+  channel        String      @default("whatsapp")
+  message        String
+  sentAt         DateTime?
+  error          String?
+  createdAt      DateTime    @default(now())
+
+  @@index([status, scheduledFor])
+  @@index([appointmentId])
+}
+
+// Configuración de recordatorios
+model ReminderConfig {
+  id                  String   @id @default(cuid())
+  name                String   @default("Recordatorio de Cita")
+  isActive            Boolean  @default(true)
+  reminder24hEnabled  Boolean  @default(true)
+  reminder2hEnabled   Boolean  @default(true)
+  reminder1hEnabled   Boolean  @default(false)
+  whatsappTemplate    String   @default("¡Hola {nombre}! Te recordamos tu cita.")
+  smsTemplate         String   @default("Recordatorio: Cita dental {fecha} {hora}.")
+  clinicPhone         String   @default("5517489261")
+  clinicName          String   @default("Clínica Dental Sonrisa Perfecta")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
