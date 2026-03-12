@@ -5,7 +5,8 @@ import { join } from 'path';
 const DATA_DIR = join(process.cwd(), 'data');
 const CONFIG_FILE = join(DATA_DIR, 'assistant-config.json');
 const KNOWLEDGE_FILE = join(DATA_DIR, 'knowledge.json');
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
+// Google usa gemini-2.5-flash en su quickstart actual.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 const DEFAULT_CONFIG = {
   name: 'Elena',
@@ -62,6 +63,7 @@ ESTILO:
 - Sé amable, cálida, profesional y clara.
 - Responde de forma natural, no robótica.
 - Da respuestas útiles y concretas.
+- Procura responder en menos de 150 tokens.
 - No inventes información.
 
 REGLAS IMPORTANTES:
@@ -72,6 +74,7 @@ REGLAS IMPORTANTES:
 - No prometas descuentos, horarios, doctores o tratamientos que no aparezcan en la base de conocimiento.
 - Si el usuario pregunta varias cosas, contesta todo en orden.
 - Puedes usar emojis con moderación cuando ayuden a que la respuesta se vea amable.
+- En el primer contacto, puedes pedir el nombre del usuario si ayuda a continuar la conversación.
 
 DATOS FIJOS DEL NEGOCIO:
 - Teléfono: 55 1748 9261
@@ -87,12 +90,12 @@ DATOS FIJOS DEL NEGOCIO:
 }
 
 function toGeminiContents(messages: ChatMessage[]) {
-  const history = messages.filter((msg) => msg.role !== 'system');
-
-  return history.map((msg) => ({
-    role: msg.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: msg.content }]
-  }));
+  return messages
+    .filter((msg) => msg.role !== 'system')
+    .map((msg) => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    }));
 }
 
 async function callGemini(messages: ChatMessage[]): Promise<string> {
@@ -119,65 +122,116 @@ async function callGemini(messages: ChatMessage[]): Promise<string> {
         contents,
         generationConfig: {
           temperature: 0.7,
-          maxOutputTokens: 500
+          maxOutputTokens: 500,
+          topP: 0.95
         }
       })
     }
   );
 
+  const rawText = await response.text();
+
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+    throw new Error(`Gemini API error ${response.status}: ${rawText}`);
   }
 
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || '').join('').trim();
+  let data: any = {};
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    throw new Error(`Gemini devolvió JSON inválido: ${rawText}`);
+  }
+
+  const text = data?.candidates?.[0]?.content?.parts
+    ?.map((part: { text?: string }) => part.text || '')
+    .join('')
+    .trim();
 
   if (!text) {
-    throw new Error('Gemini no devolvió texto');
+    const finishReason = data?.candidates?.[0]?.finishReason || 'sin finishReason';
+    const promptFeedback = JSON.stringify(data?.promptFeedback || {});
+    throw new Error(`Gemini no devolvió texto. finishReason=${finishReason}. promptFeedback=${promptFeedback}`);
   }
 
   return text;
 }
 
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findBestKnowledgeSection(message: string, knowledge: string): string {
+  if (!knowledge) return '';
+
+  const normalizedMessage = normalizeText(message);
+  const keywords = normalizedMessage.split(' ').filter((word) => word.length >= 3);
+  const sections = knowledge.split(/\n\n+/).map((s) => s.trim()).filter(Boolean);
+
+  let bestSection = '';
+  let bestScore = 0;
+
+  for (const section of sections) {
+    const normalizedSection = normalizeText(section);
+    let score = 0;
+
+    for (const keyword of keywords) {
+      if (normalizedSection.includes(keyword)) score += 1;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestSection = section;
+    }
+  }
+
+  return bestScore > 0 ? bestSection : '';
+}
+
 function getSmartResponse(message: string, assistantName: string, knowledge: string): string {
-  const lowerMessage = message.toLowerCase();
+  const lowerMessage = normalizeText(message);
 
-  if (knowledge && knowledge.length > 0) {
-    const sections = knowledge.split('\n\n');
-    const keywords = lowerMessage.split(/\s+/).filter((w) => w.length > 3);
-
-    let bestSection = '';
-    let maxMatches = 0;
-
-    for (const section of sections) {
-      const sectionLower = section.toLowerCase();
-      let matches = 0;
-
-      for (const keyword of keywords) {
-        if (sectionLower.includes(keyword)) matches++;
-      }
-
-      if (matches > maxMatches) {
-        maxMatches = matches;
-        bestSection = section;
-      }
-    }
-
-    if (maxMatches >= 1 && bestSection) {
-      return `${bestSection}\n\nSi quieres, también puedo ayudarte a agendar tu cita. 🦷`;
-    }
+  if (/^(hola|holla|hello|buenas|buenos dias|buen dia|hey|que tal)$/.test(lowerMessage)) {
+    return `¡Hola! 👋 Soy ${assistantName}. Con gusto te ayudo con tratamientos, precios, horarios, pagos y citas. Si deseas, también puedes decirme tu nombre para atenderte mejor. ¿Qué te gustaría saber?`;
   }
 
-  if (lowerMessage.match(/hola|buenos d[ií]as|buenas|hey/)) {
-    return `¡Hola! 👋 Soy ${assistantName}, asistente de Clínica Dental Sonrisa Perfecta.\n\nPuedo ayudarte con tratamientos, precios, ubicación, horarios y citas. ¿Qué deseas saber?`;
+  if (lowerMessage.includes('servicio') || lowerMessage.includes('tratamiento')) {
+    return `Claro. Estos son algunos servicios de la clínica: limpieza dental, blanqueamiento, diseño de sonrisa, ortodoncia invisible, implantes, carillas, endodoncia, periodoncia y odontopediatría. Si quieres, te explico el que te interese o te digo precios. 🦷`;
   }
 
-  if (lowerMessage.includes('cita') || lowerMessage.includes('agendar')) {
-    return 'Para agendar tu cita, usa el botón o formulario de la página. Si prefieres apoyo directo, también puedes escribir por WhatsApp al 55 1748 9261. 📅';
+  if (lowerMessage.includes('informacion') || lowerMessage.includes('información') || lowerMessage.includes('ubicacion') || lowerMessage.includes('direccion') || lowerMessage.includes('direccion')) {
+    return `Con gusto. La clínica está en Jacarandas 54, Col. Ahuehuetes, Tlalnepantla, Estado de México. Atiende de lunes a viernes de 9:00 AM a 8:00 PM y sábados de 9:00 AM a 2:00 PM. Teléfono y WhatsApp: 55 1748 9261.`;
+  }
+
+  if (lowerMessage.includes('precio') || lowerMessage.includes('costa') || lowerMessage.includes('cuanto cuesta') || lowerMessage.includes('pago')) {
+    return `Manejamos pago en efectivo, tarjetas, transferencia y financiamiento. Algunos precios base son: limpieza $500 MXN, blanqueamiento $5,000 MXN, endodoncia desde $3,500 MXN e implantes desde $18,000 MXN. Si quieres, te comparto el precio del tratamiento que te interesa.`;
+  }
+
+  if (lowerMessage.includes('cita') || lowerMessage.includes('agendar') || lowerMessage.includes('reservar') || lowerMessage.includes('reagendar') || lowerMessage.includes('cancelar')) {
+    return 'Para agendar, reagendar o cancelar tu cita, usa el botón o formulario de la página. Si prefieres apoyo directo, también puedes escribir por WhatsApp al 55 1748 9261. 📅';
+  }
+
+  const bestSection = findBestKnowledgeSection(message, knowledge);
+  if (bestSection) {
+    return `${bestSection}\n\nSi quieres, también puedo ayudarte a resolver otra duda o a agendar tu cita. 🦷`;
   }
 
   return `Soy ${assistantName}. Con gusto te ayudo con información de la clínica, tratamientos, horarios, pagos o citas. También puedes escribir por WhatsApp al 55 1748 9261. 🦷`;
+}
+
+export async function GET() {
+  try {
+    await ensureDataDir();
+    const config = await getConfig();
+    return NextResponse.json(config);
+  } catch {
+    return NextResponse.json(DEFAULT_CONFIG);
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -208,13 +262,15 @@ export async function POST(req: NextRequest) {
     let response = '';
     let usedAI = false;
     let provider = 'fallback';
+    let debugError = '';
 
     try {
       response = await callGemini(history);
       usedAI = true;
       provider = 'gemini';
     } catch (aiError: any) {
-      console.error('Gemini error, usando respaldo local:', aiError?.message || aiError);
+      debugError = aiError?.message || 'Error desconocido con Gemini';
+      console.error('Gemini error, usando respaldo local:', debugError);
       response = getSmartResponse(message, config.name, knowledge);
     }
 
@@ -231,7 +287,8 @@ export async function POST(req: NextRequest) {
       assistantName: config.name,
       usedAI,
       provider,
-      model: usedAI ? GEMINI_MODEL : 'fallback'
+      model: usedAI ? GEMINI_MODEL : 'fallback',
+      debugError: usedAI ? null : debugError
     });
   } catch (error: any) {
     console.error('Chat error:', error);
@@ -240,7 +297,8 @@ export async function POST(req: NextRequest) {
       {
         response: 'Lo siento, hubo un problema al responder. Revisa la configuración de Gemini o contacta por WhatsApp al 55 1748 9261.',
         usedAI: false,
-        provider: 'error'
+        provider: 'error',
+        debugError: error?.message || 'Error desconocido'
       },
       { status: 500 }
     );
